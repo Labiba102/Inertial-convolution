@@ -1,0 +1,32 @@
+{
+  "LeNet-1x1": {
+    "params": 1609226,
+    "flops": 3237632,
+    "model_size": 6.141868591308594,
+    "final_acc": 0.9641
+  },
+  "LeNet-3x3": {
+    "params": 1199882,
+    "flops": 11992448,
+    "model_size": 4.580345153808594,
+    "final_acc": 0.9884
+  },
+  "Mod6": {
+    "params": 1183166,
+    "flops": 2382208,
+    "model_size": 4.517213821411133,
+    "final_acc": 0.9596
+  },
+  "Mod8": {
+    "params": 1183260,
+    "flops": 1180928,
+    "model_size": 4.517457962036133,
+    "final_acc": 0.8863
+  },
+  "Mod9": {
+    "params": 1183260,
+    "flops": 1180928,
+    "model_size": 4.517457962036133,
+    "final_acc": 0.8897
+  }
+}
