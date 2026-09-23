@@ -1,7 +1,7 @@
 # Inertial Convolution for Efficient CNNs
 
 [![PyPI](https://img.shields.io/pypi/v/ahdilaw)](https://pypi.org/project/ahdilaw/)
-[![Python](https://img.shields.io/pypi/pyversions/ahdilaw)](https://pypi.org/project/ahdilaw/)
+[![Python](https://img.shields.io/badge/python-%E2%89%A53.7-blue)](https://pypi.org/project/ahdilaw/)
 
 **Inertial Convolution** replaces a dense 3×3 convolution with a much smaller *inertial filter*: a 1×1 core filter plus eight shared scalar "periphery" weights, and a divergence-based gate that decides, for every window, whether the periphery contributes. It is implemented in PyTorch and released on PyPI as [`ahdilaw`](https://pypi.org/project/ahdilaw/).
 
@@ -41,7 +41,15 @@ The design went through ten iterations (Original → Mod9); see [Design iteratio
 pip install ahdilaw
 ```
 
-Requires Python ≥ 3.7 and PyTorch (`pybind11` is installed as a dependency).
+Requires Python ≥ 3.7 and PyTorch (`pybind11` is installed as a dependency). The package exposes three layers:
+
+| Layer | Variant | Runs on | Notes |
+|---|---|---|---|
+| `inertial.special.SPConv2d` | Mod6 | CPU or GPU | Pure PyTorch. Works straight from `pip install`. |
+| `inertial.special.CTConv2d` | Mod8 | GPU only | Fused CUDA kernel. Needs the CUDA extension built from source. |
+| `inertial.Conv2d` | Mod9 (generic D×D window, K×K core) | GPU only | Fused CUDA kernel. Needs the CUDA extension built from source. |
+
+The CUDA sources live in [`library/package/ahdilaw/cuda`](library/package/ahdilaw/cuda) and are built by [`library/package/setup.py`](library/package/setup.py) when CUDA is available. The 0.0.1.1 wheel and source distribution on PyPI contain only the Python modules, so `CTConv2d` and `Conv2d` cannot run from a plain `pip install ahdilaw` of that release.
 
 ## Usage
 
@@ -72,9 +80,7 @@ class LeNetSP(nn.Module):
         return F.log_softmax(self.fc2(x), dim=1)
 ```
 
-The full training script is in [`mnist_lenet_.ipynb`](mnist_lenet_.ipynb). Mod8 and Mod9 are compiled inline with `torch.utils.cpp_extension.load_inline` inside [`analysis_.ipynb`](analysis_.ipynb) and [`benchmarking_full_mnist_.ipynb`](benchmarking_full_mnist_.ipynb); they need a CUDA GPU and `nvcc`.
-
-<!-- TODO: confirm which layers the PyPI package exposes besides SPConv2d, and update the earlier README snippet that used inertial.special.Conv2d -->
+The full training script is in [`results/mnist_lenet_.ipynb`](results/mnist_lenet_.ipynb). In the benchmarking notebooks ([`discussions/analysis_.ipynb`](discussions/analysis_.ipynb) and [`discussions/benchmarking_full_mnist_.ipynb`](discussions/benchmarking_full_mnist_.ipynb)) the Mod8 and Mod9 kernels are compiled inline with `torch.utils.cpp_extension.load_inline`; that route needs a CUDA GPU and `nvcc`.
 
 ## Experimental setup
 
@@ -82,7 +88,7 @@ Everything is trained on **MNIST** with two 3×3-window conv layers (32 and 64 f
 
 | | Setup A: baseline notebook | Setup B: full benchmark |
 |---|---|---|
-| Notebook | `mnist_lenet_.ipynb` | `benchmarking_full_mnist_.ipynb` |
+| Notebook | `results/mnist_lenet_.ipynb` | `discussions/benchmarking_full_mnist_.ipynb` |
 | Recipe | PyTorch MNIST example (dropout 0.25 / 0.5, NLL loss) | no dropout, cross-entropy loss |
 | Batch size / seed | 64 / 1 | 1024 / 42 |
 | Hardware | single GPU | 2× Tesla T4, `DataParallel` |
@@ -106,6 +112,8 @@ All numbers are from **single runs** with one seed.
 | Mod9 (CUDA, generic) | 1,183,260 | 1,180,928 ‡ | 4.52 | 88.97% |
 
 ‡ Not comparable with the other rows; see [What the FLOP counts do and do not include](#what-the-flop-counts-do-and-do-not-include).
+
+Mod8 and Mod9 accuracies should not be read as the ability of the fused layer to learn: their convolution weights were never trained (see [Mod8 and Mod9 accuracy](#mod8-and-mod9-accuracy)).
 
 ![Test accuracy and loss curves](training_curves.png)
 
@@ -159,9 +167,9 @@ The interim project report (Deliverable 4) describes an earlier version of the l
 | Absolute loss, hard mask threshold | 1 | 93.45% |
 | Softmax, mask threshold | 1 | 93.33% |
 
-The dense baselines for those runs were 99.17% (LeNet-3×3) and 95.74% (LeNet-1×1), so the early inertial layer sat about 2.7 points below the 3×3 model and about 0.7 above the 1×1 model. Hard masking was marginally ahead of sigmoid gating in these runs. At that stage the report itself notes that compute savings were not yet realised (the divergence and gating added cost, and the zero-padded 1×1 core saved no memory); Mod1 onwards address this.
+The dense baselines for those runs (from [`baselines/mnist_.ipynb`](baselines/mnist_.ipynb), batch size 64) were 99.17% (LeNet-3×3) and 95.74% (LeNet-1×1), so the early inertial layer sat about 2.7 points below the 3×3 model and about 0.7 above the 1×1 model. Hard masking was marginally ahead of sigmoid gating in these runs. At that stage the report itself notes that compute savings were not yet realised (the divergence and gating added cost, and the zero-padded 1×1 core saved no memory); Mod1 onwards address this.
 
-<!-- TODO: reconcile 96.48% (report text) with 96.58% for inertial v1 in _metric_calculations_.xlsx, and the 96.30% label (absolute loss + sigmoid in the report text, JSD + sigmoid in the spreadsheet) -->
+<!-- TODO: reconcile 96.48% (report text) with 96.58% for inertial v1 in results/_metric_calculations_.xlsx, and the 96.30% label (absolute loss + sigmoid in the report text, JSD + sigmoid in the spreadsheet) -->
 
 ### Mod8 threshold / scale sweep
 
@@ -184,7 +192,7 @@ FLOPs come from `fvcore`, which counts standard tensor operations but not custom
 - **Mod6: 2,382,208** = 1,201,280 (the 1×1 channel-mixing matrix multiplies in both layers) + 1,180,928 (`fc1` + `fc2`). The divergence computation and the periphery weighting are element-wise and are not counted.
 - **Mod7/8/9: 1,180,928** = `fc1` + `fc2` only. Their convolution cost is invisible to the counter, so **these three rows are not a fair comparison with Mod6**. Functionally they do the same kind of work as Mod6.
 
-Adding the divergence (about 0.15M operations, using the accounting in `_metric_calculations_.xlsx`) and the periphery weighting (at most about 0.15M) gives a rough estimate of **≈2.7M FLOPs for Mod6**, still roughly 78% below LeNet-3×3. This is a back-of-envelope estimate, not a measurement. The counted FLOPs should be read as an idealised operation count, not measured compute.
+Adding the divergence (about 0.15M operations, using the accounting in [`results/_metric_calculations_.xlsx`](results/_metric_calculations_.xlsx)) and the periphery weighting (at most about 0.15M) gives a rough estimate of **≈2.7M FLOPs for Mod6**, still roughly 78% below LeNet-3×3. This is a back-of-envelope estimate, not a measurement. The counted FLOPs should be read as an idealised operation count, not measured compute.
 
 ### What the gate does and does not save
 
@@ -192,7 +200,7 @@ In the current formulation both branches finish with the same 1×1 channel mixin
 
 ### Wall-clock time does not follow FLOPs
 
-Every inertial variant is slower than a plain convolution in wall-clock time. Forward passes on a batch of 64 take 0.77 ms for LeNet-3×3, versus 5.10 ms for Mod6 (≈6.6×) and 2.61 ms for the fused Mod8 (≈3.4×). Mod7, which does the same work with Python-level indexing and many small kernel launches, takes 63.7 ms (≈83×). Training epochs on 2× T4 show the same ordering: roughly 13 s for LeNet-3×3, 19–20 s for Mod6 and 15 s for Mod8. A likely reason is that dense convolutions run on heavily optimised cuDNN kernels, whereas data-dependent branching with gather/scatter is harder to make fast on a GPU; we did not profile this. Fusing the work into one kernel (Mod8) recovers most of the overhead. The current kernel recomputes the divergence separately for every output channel, so there is clear room to improve it. The efficiency gains here are in parameters and operation count, not latency.
+Every inertial variant is slower than a plain convolution in wall-clock time. Forward passes on a batch of 64 take 0.77 ms for LeNet-3×3, versus 5.10 ms for Mod6 (≈6.6×) and 2.61 ms for the fused Mod8 (≈3.4×). Mod7, which does the same work with Python-level indexing and many small kernel launches, takes 63.7 ms (≈83×). Training epochs on 2× T4 show the same ordering: roughly 13 s for LeNet-3×3 and 19–20 s for Mod6. Mod8's roughly 15 s is not a fair comparison, because its convolution layers have no backward pass (see [Mod8 and Mod9 accuracy](#mod8-and-mod9-accuracy)). A likely reason is that dense convolutions run on heavily optimised cuDNN kernels, whereas data-dependent branching with gather/scatter is harder to make fast on a GPU; we did not profile this. Fusing the work into one kernel (Mod8) recovers most of the overhead. The current kernel recomputes the divergence separately for every output channel, so there is clear room to improve it. The efficiency gains here are in parameters and operation count, not latency.
 
 ### Threshold and scale are not learned
 
@@ -202,9 +210,16 @@ Threshold and scale stay exactly at their initial values throughout training: 0.
 
 ### Mod8 and Mod9 accuracy
 
-Mod8 and Mod9 reach only about 89% against Mod6's 96%. The CUDA extensions currently expose a forward function only, with no custom backward pass, so it is likely that the convolution weights are not being updated by the optimiser and that the network is effectively a trained classifier on fixed convolutional features. Their accuracy should be read with that in mind until a backward pass is implemented.
+Mod8 and Mod9 reach only about 89% against Mod6's 96%, and the saved checkpoints in [`models/`](models) show why: **their convolution weights never trained**. The CUDA kernels implement a forward pass only (no backward or autograd function in the extension sources), so no gradient reaches the convolution parameters and only the fully connected layers learn.
 
-<!-- VERIFY before publishing: after loss.backward(), check whether model.conv1.core.grad is None for Mod8/Mod9 -->
+| Saved checkpoint | Periphery weights | `conv2` core weights |
+|---|---|---|
+| Initialisation range | uniform in ±0.10 | uniform in ±0.433 |
+| Mod6 (trained) | −0.34 to +0.07 (moved outside the range) | ±0.55 (moved outside the range) |
+| Mod8 | ±0.09 (inside the range) | ±0.433 (the initialisation bound) |
+| Mod9 | ±0.09 (inside the range) | ±0.433 (the initialisation bound) |
+
+The Mod8 and Mod9 results therefore describe a trained classifier on fixed, randomly initialised inertial features, and say little about what the fused layer could reach once it can be trained. This also means the Mod8 threshold/scale sweep above was run with untrained convolution weights.
 
 ### Scope and limitations
 
@@ -226,28 +241,34 @@ Mod8 and Mod9 reach only about 89% against Mod6's 96%. The CUDA extensions curre
 
 ## Baselines on other datasets
 
-Reference models trained before the inertial layer was evaluated. The inertial layer has not yet been run on these datasets.
+Reference models trained before the inertial layer was evaluated; the inertial layer has not yet been run on these datasets. Notebooks are in [`baselines/`](baselines).
 
-| Dataset | Model | Test accuracy |
-|---|---|---:|
-| CIFAR-10 | ResNet-18 / VGG-style CNN | 92.48% |
-| Fashion-MNIST | FashionNet, 5×5 kernels | 83.38% |
-| Fashion-MNIST | FashionNet, 3×3 kernels | 83.17% |
-| Fashion-MNIST | FashionNet, 1×1 kernels | 81.69% |
+| Dataset | Model | Training recipe | Test accuracy |
+|---|---|---|---:|
+| MNIST | LeNet-3×3 | Adadelta, batch 64, 15 epochs | 99.17% |
+| MNIST | LeNet-1×1 | Adadelta, batch 64, 15 epochs | 95.74% |
+| CIFAR-10 | ResNet-18 | SGD lr 0.1, momentum 0.9, weight decay 5e-4, batch 128, 200-epoch schedule | 92.48% |
+| Fashion-MNIST | FashionNet, 5×5 kernels | SGD lr 0.001, batch 400, 100 epochs | 83.38% |
+| Fashion-MNIST | FashionNet, 3×3 kernels | SGD lr 0.001, batch 400, 100 epochs | 83.17% |
+| Fashion-MNIST | FashionNet, 1×1 kernels | SGD lr 0.001, batch 400, 100 epochs | 81.69% |
 
-<!-- TODO: state which model the single CIFAR-10 figure belongs to -->
+- The CIFAR-10 notebook is named `cifar100_.ipynb` but trains on CIFAR-10. ResNet-18 is the only model that finished: the VGG16 run was cut off partway through training and SimpleDLA was not run.
+- The Fashion-MNIST models use plain SGD at a small learning rate, and the notebook itself cites ~93–95% as the expected accuracy for this dataset, so these numbers are likely under-trained baselines rather than a ceiling.
 
 ## Repository contents
 
-| File | Purpose |
+| Path | Purpose |
 |---|---|
-| `mnist_lenet_.ipynb` | Setup A: LeNet-3×3, LeNet-1×1 and LeNet-SP trained with the PyTorch example recipe |
-| `analysis_.ipynb` | Definitions of the original layer and Mod1–Mod9 (including the CUDA kernels) and the cost benchmark on untrained models |
-| `benchmarking_full_mnist_.ipynb` | Setup B: full 15-epoch training of five models, the Mod8 sweep, and result plots |
-| `thres_evolution_.ipynb` | 4-epoch test showing that threshold and scale are not learned under hard gating |
-| `_metric_calculations_.xlsx` | Analytical parameter and FLOP calculations, and the measured-metrics table |
-| `_metrics_.json`, `benchmarking_metrics_.pt` | Final metrics, and full per-epoch histories for setup B |
-| `figures/` | Plots used in this README |
+| `library/package/` | Source of the `ahdilaw` package: `ahdilaw/` (Python layers and `cuda/` kernels), `setup.py`, `pyproject.toml` |
+| `baselines/` | Dense baseline notebooks: MNIST, Fashion-MNIST, CIFAR-10 (`cifar100_.ipynb`) and a dataset overview |
+| `results/mnist_lenet_.ipynb` | Setup A: LeNet-3×3, LeNet-1×1 and LeNet-SP trained with the PyTorch example recipe |
+| `results/_metric_calculations_.xlsx` | Analytical parameter and FLOP calculations, and the measured-metrics table |
+| `results/_metrics_.json`, `results/benchmarking_metrics_.pt` | Final metrics, and full per-epoch histories for setup B |
+| `discussions/analysis_.ipynb` | Definitions of the original layer and Mod1–Mod9 (including the CUDA kernels) and the cost benchmark on untrained models |
+| `discussions/benchmarking_full_mnist_.ipynb` | Setup B: full 15-epoch training of five models, the Mod8 sweep, and result plots |
+| `discussions/thres_evolution_.ipynb` | 4-epoch test showing that threshold and scale are not learned under hard gating |
+| `models/` | Saved `state_dict` checkpoints for LeNet-1×1, LeNet-3×3, Mod6, Mod8 and Mod9 (setup B) |
+| `*.png` | Plots used in this README |
 
 ## Tools
 
@@ -255,11 +276,11 @@ PyTorch · CUDA (custom kernels via `load_inline`) · fvcore · NumPy · Matplot
 
 ## Authors
 
-- **Ahmed Wali**
 - **Labiba Shahab** ([@Labiba102](https://github.com/Labiba102))
+- **Ahmed Wali**
 
 Developed for the Deep Learning course at the Lahore University of Management Sciences (LUMS), Spring 2025.
 
 ## License
 
-<!-- TODO: add a LICENSE file and name it here -->
+MIT. See [LICENSE](LICENSE).
